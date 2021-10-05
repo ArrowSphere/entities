@@ -6,3 +6,23 @@
 
 This package provides an abstract class and annotations to manage entities in a standard why for ArrowSphere.
 
+## Installation
+
+Install the latest version with
+
+```bash
+$ composer require arrowsphere/entities
+```
+
+## Basic usage
+
+```php
+<?php
+
+use ArrowSphere\Entities\AbstractEntity;
+
+class MyEntity extends AbstractEntity
+{
+    
+}
+```
