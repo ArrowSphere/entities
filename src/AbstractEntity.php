@@ -10,6 +10,7 @@ use Doctrine\Common\Annotations\AnnotationReader;
 use Exception;
 use JsonSerializable;
 use ReflectionClass;
+use ReflectionNamedType;
 
 /**
  * Class AbstractEntity
@@ -50,7 +51,8 @@ abstract class AbstractEntity implements JsonSerializable
             if ($annotation instanceof Property) {
                 $name = $annotation->name ?? $property->getName();
                 if (method_exists($property, 'getType')) {
-                    $type = $annotation->type ?? $property->getType() ?? 'string';
+                    $typedProperty = $property->getType() instanceof ReflectionNamedType ? $property->getType()->getName() : null;
+                    $type = $annotation->type ?? $typedProperty ?? 'string';
                 } else {
                     $type = $annotation->type ?? 'string';
                 }
