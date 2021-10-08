@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace ArrowSphere\Entities;
 
 use ArrowSphere\Entities\Exception\EntitiesException;
+use ArrowSphere\Entities\Exception\InvalidEntityException;
+use ArrowSphere\Entities\Exception\MissingFieldException;
+use ArrowSphere\Entities\Exception\NonExistingFieldException;
 use DateTimeInterface;
 use Doctrine\Common\Annotations\AnnotationReader;
 use Exception;
@@ -43,96 +46,185 @@ abstract class AbstractEntity implements JsonSerializable
         $reflectionClass = new ReflectionClass(static::class);
         $properties = $reflectionClass->getProperties();
 
-        $errors = [];
+        $missingFields = [];
+        $missingClasses = [];
 
         foreach ($properties as $property) {
             $annotation = $annotationReader->getPropertyAnnotation($property, Property::class);
 
-            if ($annotation instanceof Property) {
-                $name = $annotation->name ?? $property->getName();
-                if (method_exists($property, 'getType')) {
-                    $typedProperty = $property->getType() instanceof ReflectionNamedType ? $property->getType()->getName() : null;
-                    $type = $annotation->type ?? $typedProperty ?? 'string';
-                } else {
-                    $type = $annotation->type ?? 'string';
-                }
-
-                $required = $annotation->required;
-                $nullable = $annotation->nullable;
-                $isArray = $annotation->isArray;
-
-                $property->setAccessible(true);
-
-                if (! array_key_exists($name, $data)) {
-                    if ($required) {
-                        $errors[] = sprintf('Missing field: %s', $name);
-                    }
-
-                    continue;
-                }
-
-                if (in_array($type, self::ALLOWED_TYPES, true)) {
-                    $getValue = static function ($value) {
-                        return $value;
-                    };
-                } elseif (in_array($type, self::SCALAR_TYPES, true)) {
-                    $getValue = static function ($value) use ($type, $name, $nullable) {
-                        if (! is_scalar($value) && ! ($value === null && $nullable)) {
-                            throw new EntitiesException(sprintf(
-                                'Invalid value for scalar field %s: type %s instead of %s',
-                                $name,
-                                gettype($value),
-                                $type
-                            ));
-                        }
-
-                        return $value;
-                    };
-                } elseif (class_exists($type)) {
-                    $getValue = static function ($value) use ($type) {
-                        if (! is_array($value) && is_subclass_of($type, self::class)) {
-                            throw new EntitiesException(
-                                sprintf(
-                                    'Invalid value for type %s while building entity of type %s',
-                                    $type,
-                                    static::class
-                                )
-                            );
-                        }
-
-                        try {
-                            return new $type($value);
-                        } catch (Exception $e) {
-                            throw new EntitiesException(
-                                sprintf(
-                                    'Unable to build element of type %s while building entity of type %s: %s',
-                                    $type,
-                                    static::class,
-                                    $e->getMessage()
-                                ),
-                                (int)$e->getCode(),
-                                $e
-                            );
-                        }
-                    };
-                } else {
-                    $errors[] = sprintf('Missing class: %s', $type);
-
-                    continue;
-                }
-
-                if ($isArray) {
-                    $property->setValue($this, array_map(static function ($value) use ($getValue) {
-                        return $getValue($value);
-                    }, $data[$name]));
-                } else {
-                    $property->setValue($this, $getValue($data[$name]));
-                }
+            if (! $annotation instanceof Property) {
+                continue;
             }
+
+            $name = $annotation->name ?? $property->getName();
+            if (method_exists($property, 'getType')) {
+                $typedProperty = $property->getType() instanceof ReflectionNamedType ? $property->getType()->getName() : null;
+                $type = $annotation->type ?? $typedProperty ?? 'string';
+            } else {
+                $type = $annotation->type ?? 'string';
+            }
+
+            $required = $annotation->required;
+            $nullable = $annotation->nullable;
+            $isArray = $annotation->isArray;
+
+            $property->setAccessible(true);
+
+            if (! array_key_exists($name, $data)) {
+                if ($required) {
+                    $missingFields[] = $name;
+                }
+
+                continue;
+            }
+
+            if (in_array($type, self::ALLOWED_TYPES, true)) {
+                $getValue = [__CLASS__, 'getValueForAllowedType'];
+            } elseif (in_array($type, self::SCALAR_TYPES, true)) {
+                $getValue = [__CLASS__, 'getValueForScalarType'];
+            } elseif (class_exists($type)) {
+                $getValue = [__CLASS__, 'getValueForClassType'];
+            } else {
+                $missingClasses[] = sprintf(
+                    'Missing class %s for field %s',
+                    $type,
+                    $property->getName()
+                );
+
+                continue;
+            }
+
+            if (! is_callable($getValue)) {
+                throw new InvalidEntityException(
+                    sprintf('%s is not a callable', print_r($getValue, true))
+                );
+            }
+
+            if ($isArray) {
+                $property->setValue($this, array_map(static function ($value) use ($getValue, $type, $name, $nullable) {
+                    return $getValue($value, $type, $name, $nullable);
+                }, $data[$name]));
+            } else {
+                $property->setValue($this, $getValue($data[$name], $type, $name, $nullable));
+            }
+
+            unset($data[$name]);
         }
 
-        if (! empty($errors)) {
-            throw new EntitiesException(implode(', ', $errors));
+        if (! empty($missingClasses)) {
+            throw new InvalidEntityException(
+                sprintf(
+                    'Some classes are missing while building entity of type %s: %s',
+                    static::class,
+                    implode(', ', $missingClasses)
+                )
+            );
+        }
+
+        if (! empty($data)) {
+            throw new NonExistingFieldException(
+                sprintf(
+                    'Non existing fields while building entity of type %s: %s',
+                    static::class,
+                    implode(', ', array_keys($data))
+                )
+            );
+        }
+
+        if (! empty($missingFields)) {
+            throw new MissingFieldException(
+                sprintf(
+                    'Missing fields while building entity of type %s: %s',
+                    static::class,
+                    implode(', ', $missingFields)
+                )
+            );
+        }
+    }
+
+    /**
+     * @param mixed $value
+     * @param string $type
+     * @param string $name
+     * @param bool $nullable
+     *
+     * @return mixed
+     */
+    private static function getValueForAllowedType($value, string $type, string $name, bool $nullable)
+    {
+        return $value;
+    }
+
+    /**
+     * @param mixed $value
+     * @param string $type
+     * @param string $name
+     * @param bool $nullable
+     *
+     * @return bool|float|int|string|null
+     *
+     * @throws EntitiesException
+     */
+    private static function getValueForScalarType($value, string $type, string $name, bool $nullable)
+    {
+        if ($value === null && $nullable) {
+            return null;
+        }
+
+        if (! is_scalar($value)) {
+            throw new EntitiesException(sprintf(
+                'Invalid value for scalar field %s: type %s instead of %s while building entity of type %s',
+                $name,
+                gettype($value),
+                $type,
+                static::class
+            ));
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param mixed $value
+     * @param string $type
+     * @param string $name
+     * @param bool $nullable
+     *
+     * @return mixed|null
+     *
+     * @throws EntitiesException
+     */
+    private static function getValueForClassType($value, string $type, string $name, bool $nullable)
+    {
+        if ($value === null && $nullable) {
+            return null;
+        }
+
+        if (! is_array($value) && is_subclass_of($type, self::class)) {
+            throw new EntitiesException(
+                sprintf(
+                    'Invalid value for field %s of type %s while building entity of type %s',
+                    $name,
+                    $type,
+                    static::class
+                )
+            );
+        }
+
+        try {
+            return new $type($value);
+        } catch (Exception $e) {
+            throw new EntitiesException(
+                sprintf(
+                    'Unable to build field %s of type %s while building entity of type %s: %s',
+                    $name,
+                    $type,
+                    static::class,
+                    $e->getMessage()
+                ),
+                (int)$e->getCode(),
+                $e
+            );
         }
     }
 
@@ -178,27 +270,48 @@ abstract class AbstractEntity implements JsonSerializable
      * @param string $method
      * @param array $params
      *
-     * @return mixed
+     * @return mixed|null
      */
-    public function __call($method, $params)
+    public function __call(string $method, array $params)
     {
         $property = lcfirst(substr($method, 3));
         $prefix = substr($method, 0, 3);
 
-        if (! in_array($prefix, ['get', 'set'])) {
-            return null;
-        }
-
         if ($prefix === 'get') {
-            return $this->$property;
+            return $this->getProperty($property);
         }
 
         if ($prefix === 'set') {
-            $this->$property = $params[0];
-
-            return $this;
+            return $this->setProperty($property, $params[0]);
         }
 
         return null;
+    }
+
+    /**
+     * Sets the value of a property.
+     *
+     * @param string $property
+     * @param mixed $value
+     *
+     * @return static
+     */
+    public function setProperty(string $property, $value): self
+    {
+        $this->$property = $value;
+
+        return $this;
+    }
+
+    /**
+     * Returns the value of a property.
+     *
+     * @param string $property
+     *
+     * @return mixed
+     */
+    public function getProperty(string $property)
+    {
+        return $this->$property;
     }
 }
