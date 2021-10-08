@@ -5,6 +5,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the way exceptions are thrown while constructing an entity:
+  - if some fields are provided but were not described in any annotation, a `NonExistingFieldException` is thrown
+  - if some required fields are missing, a `MissingFieldException` is thrown
+  - if a class described in an annotation is not found, an `InvalidEntityException` is thrown
+
 ## [0.1.0] - 2021-10-06
 
 ### Added

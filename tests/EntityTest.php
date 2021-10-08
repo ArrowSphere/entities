@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ArrowSphere\Entities\Tests;
 
 use ArrowSphere\Entities\AbstractEntity;
+use ArrowSphere\Entities\Exception\MissingFieldException;
+use ArrowSphere\Entities\Exception\NonExistingFieldException;
 use ArrowSphere\Entities\Property;
 use DateTime;
 
@@ -99,6 +101,26 @@ JSON;
                 'expected' => $json,
             ],
         ];
+    }
+
+    public function testMissingField(): void
+    {
+        $this->expectException(MissingFieldException::class);
+        new Member();
+    }
+
+    public function testNonExistingField(): void
+    {
+        $this->expectException(NonExistingFieldException::class);
+        new Member([
+            'name'     => 'Normal guy',
+            'realName' => null,
+            'powers'   => [],
+            'titi'     => 'toto',
+            'tata'     => [
+                'blah' => 'blah',
+            ],
+        ]);
     }
 }
 
