@@ -5,6 +5,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added automatic tests for PHP 8.1
+
 ### Changed
 
 - Changed the way exceptions are thrown while constructing an entity:
